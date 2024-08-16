@@ -417,9 +417,12 @@ static void sam_write_sq(kstring_t *s, char *seq, int l, int rev, int comp)
 	} else str_copy(s, seq, seq + l);
 }
 
-static inline const mm_reg1_t *get_sam_pri(int n_regs, const mm_reg1_t *regs)
+static inline const mm_reg1_t *get_sam_pri(int n_regs, const mm_reg1_t *regs, int rid)
 {
 	int i;
+	for (i = 0; i < n_regs; ++i)
+		if (regs[i].rid == rid)
+			return &regs[i];
 	for (i = 0; i < n_regs; ++i)
 		if (regs[i].sam_pri)
 			return &regs[i];
@@ -466,12 +469,12 @@ void mm_write_sam3(kstring_t *s, const mm_idx_t *mi, const mm_bseq1_t *t, int se
 	// find the primary of the previous and the next segments, if they are mapped
 	if (n_seg > 1) {
 		int i, next_sid = (seg_idx + 1) % n_seg;
-		r_next = get_sam_pri(n_regss[next_sid], regss[next_sid]);
+		r_next = get_sam_pri(n_regss[next_sid], regss[next_sid], r->rid);
 		if (n_seg > 2) {
 			for (i = 1; i <= n_seg - 1; ++i) {
 				int prev_sid = (seg_idx + n_seg - i) % n_seg;
 				if (n_regss[prev_sid] > 0) {
-					r_prev = get_sam_pri(n_regss[prev_sid], regss[prev_sid]);
+					r_prev = get_sam_pri(n_regss[prev_sid], regss[prev_sid], r->rid);
 					break;
 				}
 			}
@@ -493,7 +496,7 @@ void mm_write_sam3(kstring_t *s, const mm_idx_t *mi, const mm_bseq1_t *t, int se
 		else if (!r->sam_pri) flag |= 0x800;
 	}
 	if (n_seg > 1) {
-		if (r && r->proper_frag) flag |= 0x2; // TODO: this doesn't work when there are more than 2 segments
+		if (r && r_next && (r->rid == r_next->rid)) flag |= 0x2; // TODO: this doesn't work when there are more than 2 segments
 		if (seg_idx == 0) flag |= 0x40;
 		else if (seg_idx == n_seg - 1) flag |= 0x80;
 		if (r_next == NULL) flag |= 0x8;
