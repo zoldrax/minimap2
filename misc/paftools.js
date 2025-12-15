@@ -1,6 +1,6 @@
 #!/usr/bin/env k8
 
-var paftools_version = '2.28-r1209';
+var paftools_version = '2.30-r1287';
 
 /*****************************
  ***** Library functions *****
@@ -1740,10 +1740,11 @@ function paf_gff2bed(args)
 
 function paf_sam2paf(args)
 {
-	var c, pri_only = false, long_cs = false, pri_pri_only = false;
-	while ((c = getopt(args, "pPL")) != null) {
+	var c, pri_only = false, long_cs = false, pri_pri_only = false, allow_unmapped = false;
+	while ((c = getopt(args, "pPUL")) != null) {
 		if (c == 'p') pri_only = true;
 		else if (c == 'P') pri_pri_only = pri_only = true;
+		else if (c == 'U') allow_unmapped = true;
 		else if (c == 'L') long_cs = true;
 	}
 	if (args.length == getopt.ind) {
@@ -1751,6 +1752,7 @@ function paf_sam2paf(args)
 		print("Options:");
 		print("  -p      convert primary or supplementary alignments only");
 		print("  -P      convert primary alignments only");
+		print("  -U      convert unmapped reads as well");
 		print("  -L      output the cs tag in the long form");
 		exit(1);
 	}
@@ -1775,7 +1777,15 @@ function paf_sam2paf(args)
 		var flag = parseInt(t[1]);
 		if (t[9] != '*' && t[10] != '*' && t[9].length != t[10].length)
 			throw Error("at line " + lineno + ": inconsistent SEQ and QUAL lengths - " + t[9].length + " != " + t[10].length);
-		if (t[2] == '*' || (flag&4) || t[5] == '*') continue;
+        if (t[2] == '*' || (flag&4) || t[5] == '*') {
+			if (allow_unmapped) {
+            // emit an unmapped PAF line instead of skipping
+            // fields: qname, qlen, qstart, qend, strand, tname, tlen, tstart, tend, n_match, aln_len, mapq
+            var qlen_val = (t[9] == '*' ? 0 : t[9].length);
+            print([t[0], qlen_val, 0, 0, '*', '*', 0, 0, 0, 0, 0, 0].join("\t"));
+			}
+            continue;
+        }
 		if (pri_only && (flag&0x100)) continue;
 		if (pri_pri_only && (flag&0x900)) continue;
 		var tlen = ctg_len[t[2]];
@@ -2187,7 +2197,7 @@ function paf_mapeval(args)
 	}
 
 	var lineno = 0, last = null, a = [], n_unmapped = null;
-	var re_cigar = /(\d+)([MIDSHN])/g;
+	var re_cigar = /(\d+)([MIDSHN=X])/g;
 	while (file.readline(buf) >= 0) {
 		var m, line = buf.toString();
 		++lineno;
@@ -2225,7 +2235,7 @@ function paf_mapeval(args)
 				var n_gap = 0, mlen = 0;
 				while ((m = re_cigar.exec(t[5])) != null) {
 					var len = parseInt(m[1]);
-					if (m[2] == 'M') pos_end += len, mlen += len;
+					if (m[2] == 'M' || m[2] == 'X' || m[2] == '=') pos_end += len, mlen += len;
 					else if (m[2] == 'I') n_gap += len;
 					else if (m[2] == 'D') n_gap += len, pos_end += len;
 				}
@@ -2494,6 +2504,10 @@ function paf_junceval(args)
 		} else { // SAM
 			ctg_name = t[2], pos = parseInt(t[3]) - 1, cigar = t[5];
 			var flag = parseInt(t[1]);
+			if (flag & 1) {
+				if (flag & 0x40) qname += '/1';
+				else if (flag & 0x80) qname += '/2';
+			}
 			if (flag&0x100) continue; // secondary
 		}
 
@@ -2609,7 +2623,8 @@ function paf_junceval(args)
 function paf_exoneval(args) // adapted from paf_junceval()
 {
 	var c, l_fuzzy = 0, print_ovlp = false, print_err_only = false, first_only = false, chr_only = false, aa = false, is_bed = false, use_cds = false, eval_base = false;
-	while ((c = getopt(args, "l:epcab1ds")) != null) {
+	var skip_start = false, skip_last = false;
+	while ((c = getopt(args, "l:epcab1dsft")) != null) {
 		if (c == 'l') l_fuzzy = parseInt(getopt.arg);
 		else if (c == 'e') print_err_only = print_ovlp = true;
 		else if (c == 'p') print_ovlp = true;
@@ -2619,6 +2634,8 @@ function paf_exoneval(args) // adapted from paf_junceval()
 		else if (c == '1') first_only = true;
 		else if (c == 'd') use_cds = true;
 		else if (c == 's') eval_base = true;
+		else if (c == 'f') skip_start = true;
+		else if (c == 't') skip_last = skip_start = true;
 	}
 
 	if (args.length - getopt.ind < 1) {
@@ -2631,6 +2648,8 @@ function paf_exoneval(args) // adapted from paf_junceval()
 		print("  -e        print erroreous overlapping exons");
 		print("  -c        only consider alignments to /^(chr)?([0-9]+|X|Y)$/");
 		print("  -1        only process the first alignment of each query");
+		print("  -f        skip the first exon in the miniprot mode");
+		print("  -t        skip the first and the last exons");
 		print("  -b        BED as input");
 		print("  -s        compute base Sn and Sp (more memory)");
 		exit(1);
@@ -2760,6 +2779,8 @@ function paf_exoneval(args) // adapted from paf_junceval()
 				for (var i = tmp_exon.length - 1; i >= 0; --i)
 					exon.push([pos + (glen - tmp_exon[i][1]), pos + (glen - tmp_exon[i][0])]);
 			}
+			if (skip_start) exon.shift();
+			if (skip_last) exon.pop();
 		} else {
 			var tmp_st = pos;
 			while ((m = re_cigar.exec(cigar)) != null) {
